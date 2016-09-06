@@ -1,0 +1,335 @@
+  module FSAlab5
+  where 
+  import Data.List
+
+  -- import Yices
+
+  import Math.SMT.Yices.Parser
+  import Math.SMT.Yices.Syntax
+  import Math.SMT.Yices.Pipe
+  import Data.List
+  import Control.Monad
+ -- set paths to your yices
+ -- please download yices 1.0.40. I haven't got time to update the bindings yet
+  yicesPath = "/Users/robertwhite/Projects/yices-1.0.40/bin/yices" -- your yices path
+
+  -- define data type in Yices for later use.
+
+  int = VarT "int"
+  nat = VarT "nat"
+  bool = VarT "bool"
+  real = VarT "real"
+
+  -- define also some constants
+  true = LitB True
+  false = LitB False
+  --define a list of n * n variables
+
+  defs w m = concat (map (\x -> map (\y -> DEFINE ((x ++""++ y) , bool) Nothing) m) w)
+
+
+  -- define a list of variables
+  --var_list_m::[[ExpY]]
+  var_list_w w m =  (map (\x -> map (\y -> VarE (x ++ "" ++ y)) m) w)
+  --var_list_m = (map (\x -> map (\y -> VarE (x ++ " " ++ y)) w) m)
+  var_list_m vl_w = 
+    let n = length vl_w in 
+    let list = map fromIntegral [1..n] in 
+    let f ll  index = map (\l -> l !! (index-1)) ll in  
+    map (f vl_w) list
+
+
+  var_all_list vl_w vl_m = (concat (vl_w ++ vl_m))
+  -- a list of VarE to be used later for adding constrants
+
+  -- some men and woman with their names as strings
+  get_name i n = map (\x -> i ++ (show x)) [1..n]
+
+
+
+
+  ---------------------------------------------------------------------------
+  -- define encodeing of some relation
+  -- x can not be true at the same time with any elem of l
+  differ x l = map (\y -> ASSERT (NOT (AND [x,y]))) l
+  -- 
+
+  ctr_unique [] = []
+  ctr_unique [x] = []
+  ctr_unique l = 
+    (differ (head l) (tail l)) ++ (ctr_unique (tail l))
+
+  -- each agent is uniquely matched to another agent of opposite gender
+  unique_engate var_list_w var_list_m = concat (map ctr_unique var_list_m) ++ concat (map ctr_unique var_list_w)
+
+  --every agent has to get engaged
+  must_engate var_list_w var_list_m = (map (\l -> ASSERT (OR l)) var_list_m) ++ (map (\l -> ASSERT (OR l)) var_list_w) 
+
+  get_index :: Int -> Int -> [(Integer, [Integer])] -> Int
+  get_index row e ll =
+    --let row' = fromInteger row in  
+    --let ll' = convert_integer_int_pair_list ll in 
+    let (Just i) = elemIndex e (map fromIntegral (snd (ll !! row))) in
+    i
+
+  encode_max :: [[ExpY]] -> [(Integer, [Integer])] -> [[ExpY]] -> [(Integer, [Integer])] -> [CmdY]
+  encode_max vl_w pl_w vl_m pl_m = 
+    let n = length vl_w in 
+    [ASSERT_P ((vl_w !! w) !! m) (Just ((get_weight (get_index w m pl_w)) + (get_weight (get_index m w pl_m)))) | w <- [1..n], m <- [1..n]]
+
+
+
+  --encode_max_woman  ::  [[ExpY]] -> [(Integer, [Integer])] -> [[CmdY]]
+  --encode_max_woman varlist preflist = 
+  --  let n = length preflist in 
+  --  let f vl who (p, w) = ASSERT_P ((vl!!(who - 1)) !! (p-1)) (Just (get_weight w) ) in
+  --  let wei = reverse (map fromIntegral [1..n]) in  
+  --  let encode vl (who, plist) = (map (f vl (fromIntegral who)) (zip (map fromIntegral plist) wei)) in 
+  --  map (encode varlist) preflist
+
+
+  ---------------------------------------------------------------------------
+  -- a value retrieval function for decoding (to be used later)
+
+  -- actually there is a simpler implementation called lookup? TODO
+  obtain_bvalue x [] = Nothing
+  obtain_bvalue x l = 
+    let h = head l in 
+    let ((VarE vname) := (LitB b)) = h in 
+    let VarE xname = x in 
+    if xname == vname then 
+      Just b 
+      else 
+        (obtain_bvalue x (tail l))
+
+  obtain_bool_value vars valuelist =
+    map (\x -> obtain_bvalue  x valuelist) vars
+
+
+
+-- get engatement 
+  get_eng :: [Integer] -> [Integer] -> [Maybe Bool] -> [(Integer, Integer)]
+  get_eng women men lst = do
+     let n = length men
+     l<- [ (w, m) | w <- women, m <- men , ((lst !!((fromIntegral w -1) * n + (fromIntegral m-1))) == (Just True))]
+     return l 
+
+  convert_integer_int_pair_list :: [(Integer,Integer)] -> [(Int, Int)]
+  convert_integer_int_pair_list l = 
+     let l' = [((fromInteger x),(fromInteger y))| (x, y) <- l] in 
+     l'
+
+
+
+
+
+  infix 1 ==> 
+  
+  (==>) :: Bool -> Bool -> Bool
+  p ==> q = (not p) || q
+ 
+  forall = flip all
+
+  assert :: (a -> b -> Bool) -> (a -> b) -> a -> b 
+  assert p f x = if p x (f x) then f x 
+                  else error "assert"
+
+  invar :: (a -> Bool) -> (a -> a) -> a -> a
+  invar p = assert (\ x y -> not (p x) || p y) 
+
+  while = until . (not.)
+
+  type Man   = Int
+  type Woman = Int
+  type Mpref = [(Man,[Woman])]
+  -- Yices works with Integers only :(
+  type Pref = [(Integer,[Integer])]
+  type Wpref = [(Woman,[Man])]
+  type Engaged = [(Woman,Man)]
+
+  mt :: Mpref
+  mt = [(1,[2,1,3]), (2, [3,2,1]), (3,[1,3,2])]
+  
+  wt :: Wpref
+  wt = [(1,[1,2,3]),(2,[3,2,1]), (3,[1,3,2])]
+
+  --mt' :: Pref
+  --mt' = [(1,[2,1,3]), (2, [3,2,1]), (3,[1,3,2])]
+  
+  --wt' :: Pref
+  --wt' = [(1,[1,2,3]),(2,[3,2,1]), (3,[1,3,2])]
+  pref_int_to_integer :: Wpref -> Pref
+  pref_int_to_integer ll = 
+    let ll' = [(toInteger i, (map toInteger l) )| (i, l) <- ll] in 
+    ll'
+
+-- ex 1:
+
+
+-- ex 2:
+
+
+--- ex 3: the following is a test using 
+  obtain_eng :: Wpref -> Wpref -> IO Engaged
+  obtain_eng wt mt =
+    do yp@(Just hin, Just hout, Nothing, p) <- createYicesPipe yicesPath []
+       let mt' = pref_int_to_integer mt --
+       let wt' =  pref_int_to_integer wt 
+       let n = length mt
+       -- string of integer basically :)
+       let m = get_name "m" n
+       let w = get_name "w" n
+       let vl_w = var_list_w w m 
+       let vl_m = var_list_m vl_w
+       let all_var = var_all_list vl_w vl_m
+       --obtain a list of men and women
+       let men = map fst mt'
+       let women = map fst wt'
+
+       let unique_eg = unique_engate vl_w vl_m 
+       print "----unique engage ----"
+       print unique_eg
+       print "----must_engate------"
+       let must_eg = must_engate vl_w vl_m 
+       print must_eg
+       print "-----what's this???"
+       runCmdsY yp ((defs w m) ++ unique_eg ++ must_eg)
+       -- hard clauses must be satisfiable
+       --Sat ss <- checkY yp
+       --return ss
+       let mymax = (encode_max vl_w wt' vl_m mt')
+       print "--------maxsat----------------"
+       print mymax
+       runCmdsY yp (mymax  ++ [MAXSAT])
+       print "-----------result-------------"
+       Sat ss' <- checkMAX yp
+       print ss' 
+       let model = obtain_bool_value all_var ss'
+       print "-------and model is ----------------"
+       print model
+       --return model 
+       let eng = get_eng women men model
+       --return eng
+       let eng' = convert_integer_int_pair_list (eng)
+       return eng'       --return (isStable (wt, mt) eng')
+
+-- discussion: This failed the test.
+-- 
+  get_weight :: Int -> Integer
+  get_weight 1 = 2
+  get_weight x = 2 * (get_weight (x-1)) -1
+
+  -- we modify the encode_max function.
+  -- test for wt and mt
+  test_stable_maxsat = do
+    eng <- obtain_eng wt mt
+    print eng
+    --weight <- (evaluate_weight_engage eng wt mt)
+    --print weight
+    return $ isStable (wt, mt) eng
+
+  --calculate_weight :: Int -> [Int] -> Integer
+  --calculate_weight index l = 
+  --  do  
+  --    let (Just index) = elemIndex index l 
+  --    return  (get_weight (index))
+  --    return w 
+
+  --fd :: Wpref -> Wpref -> Integer -> (Int, Int) -> Integer
+  --fd wt mt acc (woman, man) =
+  --    let weight_w = calculate_weight man (snd (wt !! (woman - 1))) in 
+  --    let weight_m = calculate_weight woman (snd (mt !! (man - 1 ))) in 
+  --    (acc + weight_m) + weight_w 
+
+  --evaluate_weight_engage :: Engaged -> Wpref -> Mpref -> Int
+  --evaluate_weight_engage eng wt mt =     
+  --  foldl (fd wt mt) 0 eng 
+
+
+  type PrefFct = Int -> Int -> Int -> Bool
+  
+  plist2pfct :: [(Int,[Int])] -> PrefFct 
+  plist2pfct table x y y' = 
+    let 
+      Just prefs = lookup x table
+    in elem y (takeWhile (/= y') prefs)
+    -- takeWhile is to get before y
+    -- *FSAlab5> takeWhile (/= 3) [1,2,3,4,5,6]
+    --[1,2]
+
+
+  stableMatch :: (Wpref,Mpref) -> Engaged
+  stableMatch (wpref,mpref) = 
+    let 
+       men     = map fst mpref
+       free    = men
+       engaged = []
+       f       = \ (_,_,x) ->  x
+    in
+     f $ stable wpref (mpref,free,engaged)
+
+  stable ::  Wpref -> (Mpref,[Man],Engaged) -> (Mpref,[Man],Engaged)
+  stable wpref = let 
+     wpr = plist2pfct wpref
+   in while (\ (_,free, _) -> not (null free))
+             (\ (mpr, (m:free), engaged)  ->
+              let
+                 Just (w:ws) = lookup m mpr
+                 match = lookup w engaged
+                 mpr' = (m,ws) : (delete (m,w:ws) mpr)
+                 (engaged',free') = case match of 
+                     Nothing -> ((w,m):engaged,free)
+                     Just m' -> 
+                       if wpr w m m' then (
+                           (w,m) : (delete (w,m') engaged),
+                            m':free)
+                       else (engaged, m:free)
+              in (mpr',free',engaged'))
+
+  makeMatch = stableMatch (mt,wt)
+
+  makeMatch2 = stableMatch (wt,mt)
+
+  freeProp :: (Mpref,[Man],Engaged) -> Bool
+  freeProp (mpref, free, engaged) = let 
+      men  = map fst mpref
+      emen = map snd engaged 
+    in forall men (\x -> elem x free == notElem x emen)
+
+  isStable :: (Wpref, Mpref) -> Engaged -> Bool
+  isStable (wpref, mpref) engaged = let 
+      wf = plist2pfct wpref
+      mf = plist2pfct mpref
+    in 
+      forall engaged (\ (w,m) -> forall engaged 
+            (\ (w',m') -> (wf w m' m ==> mf m' w' w)
+                           && 
+                          (mf m w' w ==> wf w' m' m)))
+
+  stableMatch' :: (Wpref, Mpref)  -> Engaged
+  stableMatch' = assert isStable stableMatch 
+
+  mt2 = [(1, [1, 5, 3, 9, 10, 4, 6, 2, 8, 7]),
+         (2, [3, 8, 1, 4, 5, 6, 2, 10, 9, 7]),
+         (3, [8, 5, 1, 4, 2, 6, 9, 7, 3, 10]),
+         (4, [9, 6, 4, 7, 8, 5, 10, 2, 3, 1]), 
+         (5, [10, 4, 2, 3, 6, 5, 1, 9, 8, 7]),
+         (6, [2, 1, 4, 7, 5, 9, 3, 10, 8, 6]),
+         (7, [7, 5, 9, 2, 3, 1, 4, 8, 10, 6]),
+         (8, [1, 5, 8, 6, 9, 3, 10, 2, 7, 4]),
+         (9, [8, 3, 4, 7, 2, 1, 6, 9, 10, 5]), 
+         (10, [1, 6, 10, 7, 5, 2, 4, 3, 9, 8])]
+
+  wt2 =[(1, [2, 6, 10, 7, 9, 1, 4, 5, 3, 8]),
+        (2, [2, 1, 3, 6, 7, 4, 9, 5, 10, 8]),
+        (3, [6, 2, 5, 7, 8, 3, 9, 1, 4, 10]),
+        (4, [6, 10, 3, 1, 9, 8, 7, 4, 2, 5]),
+        (5, [10, 8, 6, 4, 1, 7, 3, 5, 9, 2]),
+        (6, [2, 1, 5, 9, 10, 4, 6, 7, 3, 8]),
+        (7, [10, 7, 8, 6, 2, 1, 3, 5, 4, 9]),
+        (8, [7, 10, 2, 1, 9, 4, 8, 5, 3, 6]),
+        (9, [9, 3, 8, 7, 6, 2, 1, 5, 10, 4]),
+        (10, [5, 8, 7, 1, 2, 10, 3, 9, 6, 4])]
+
+  makeMatch3 = stableMatch' (mt2,wt2)
+

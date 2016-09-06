@@ -1,0 +1,6 @@
+See Main.hs for example usage.
+Note that you will need to install yices-1.0.40. Not the newest version!
+
+MG: I had to make some changes to get the code running. Also it is
+    not immediately clear how much of the basic yices sample code
+    is still here and the whole Main.hs could use some cleanup.
