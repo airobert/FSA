@@ -1,1 +1,1 @@
-*.rb linguist-language=Haskell
+*.* linguist-language=Haskell
